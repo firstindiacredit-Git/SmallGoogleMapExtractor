@@ -93,13 +93,29 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         });
 
         try {
-            // Check if Google Maps asked for consent (GDPR page)
-            if (await page.$('form[action*="consent"]')) {
-                console.log('Consent form detected. Accepting...');
-                await page.click('form[action*="consent"] button[type="submit"]');
-                await page.waitForTimeout(5000); // Wait for redirection
+            // Check for various possible consent form selectors
+            console.log('Checking for consent form...');
+            const consentSelectors = [
+                'form[action*="consent"] button[type="submit"]',
+                'button[jsname="b3VHJd"]',
+                'button[jsname="higCR"]',
+                'form[action*="consent"] input[type="submit"]',
+                'button:has-text("Accept all")',
+                'button:has-text("I agree")',
+                'button[aria-label*="Accept"]'
+            ];
+
+            for (const selector of consentSelectors) {
+                const consentButton = await page.$(selector);
+                if (consentButton) {
+                    console.log(`Consent form found with selector: ${selector}`);
+                    await consentButton.click();
+                    await page.waitForTimeout(3000);
+                    break;
+                }
             }
 
+            console.log('Proceeding with search...');
             console.log('Waiting for search box...');
             await page.waitForSelector('#searchboxinput', { timeout: 60000 });
             console.log('Search box found! Typing location...');
