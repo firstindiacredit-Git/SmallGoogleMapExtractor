@@ -62,77 +62,105 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
   };
 
   try {
+    // Modified browser launch configuration for AWS
     browser = await puppeteer.launch({
       headless: true,
-      executablePath: executablePath(),
+      executablePath: process.env.NODE_ENV === 'production' 
+        ? '/usr/bin/chromium-browser'  // Use system Chromium on AWS
+        : executablePath(),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
         '--single-process',
         '--disable-extensions',
-        '--js-flags="--max-old-space-size=512"'
+        '--ignore-certificate-errors',
+        '--disable-accelerated-2d-canvas',
+        '--disable-web-security',
+        '--disable-features=site-per-process',
+        '--window-size=1920,1080'
       ]
     });
 
     page = await browser.newPage();
     
     // Set longer timeouts
-    await page.setDefaultNavigationTimeout(90000);
-    await page.setDefaultTimeout(90000);
+    await page.setDefaultNavigationTimeout(120000);
+    await page.setDefaultTimeout(120000);
+
+    // Set viewport
+    await page.setViewport({
+      width: 1920,
+      height: 1080
+    });
 
     console.log('Navigating to Google Maps...');
     
     while (retryCount < MAX_RETRIES) {
       try {
-        // Navigate to Google Maps
+        // Clear cookies and cache before each attempt
+        await page.setCookie();
+        await page.evaluate(() => {
+          localStorage.clear();
+          sessionStorage.clear();
+        });
+
         await page.goto('https://www.google.com/maps', { 
-          waitUntil: 'networkidle2',
-          timeout: 90000 
+          waitUntil: ['networkidle0', 'domcontentloaded'],
+          timeout: 120000 
         });
 
-        // Wait for search box
-        console.log('Waiting for search box...');
-        await page.waitForSelector('#searchboxinput', { 
-          visible: true, 
-          timeout: 30000 
-        });
+        // Wait for initial load
+        await delay(5000);
 
-        await delay(2000);
+        // Check if search box exists
+        const searchBox = await page.$('#searchboxinput');
+        if (!searchBox) {
+          console.log('Search box not found, retrying...');
+          throw new Error('Search box not found');
+        }
 
-        // Type search query
         console.log('Typing search query...');
         await page.type('#searchboxinput', location ? `${keyword} in ${location}` : keyword);
-        await delay(1000);
+        await delay(2000);
 
-        // Click search button
+        const searchButton = await page.$('#searchbox-searchbutton');
+        if (!searchButton) {
+          throw new Error('Search button not found');
+        }
+
         console.log('Clicking search button...');
-        await page.click('#searchbox-searchbutton');
-        await delay(3000);
+        await searchButton.click();
+        await delay(5000);
 
-        // Wait for any of these result selectors
+        // Wait for any result selector with longer timeout
         console.log('Waiting for results...');
-        await Promise.race([
-          page.waitForSelector('div[role="article"]', { visible: true, timeout: 30000 }),
-          page.waitForSelector('.Nv2PK', { visible: true, timeout: 30000 }),
-          page.waitForSelector('a[href^="/maps/place"]', { visible: true, timeout: 30000 }),
-          page.waitForSelector('.section-result', { visible: true, timeout: 30000 }),
-          page.waitForSelector('.DxyBCb', { visible: true, timeout: 30000 })
-        ]);
+        const resultSelectors = [
+          'div[role="article"]',
+          '.Nv2PK',
+          'a[href^="/maps/place"]',
+          '.section-result',
+          '.DxyBCb'
+        ];
 
-        // Additional check for results
-        const hasResults = await page.evaluate(() => {
-          return !!(
-            document.querySelector('div[role="article"]') ||
-            document.querySelector('.Nv2PK') ||
-            document.querySelector('a[href^="/maps/place"]') ||
-            document.querySelector('.section-result') ||
-            document.querySelector('.DxyBCb')
-          );
-        });
+        let resultsFound = false;
+        for (const selector of resultSelectors) {
+          try {
+            await page.waitForSelector(selector, { 
+              visible: true, 
+              timeout: 30000 
+            });
+            resultsFound = true;
+            break;
+          } catch (e) {
+            console.log(`Selector ${selector} not found, trying next...`);
+          }
+        }
 
-        if (hasResults) {
+        if (resultsFound) {
           console.log('Results found successfully');
           break;
         }
@@ -140,13 +168,13 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         throw new Error('No results found');
       } catch (error) {
         retryCount++;
-        console.log(`Attempt ${retryCount} failed. Retrying...`);
+        console.log(`Attempt ${retryCount} failed: ${error.message}`);
         
         if (retryCount >= MAX_RETRIES) {
-          throw new Error('Failed to load results after multiple attempts');
+          throw new Error(`Failed to load results after ${MAX_RETRIES} attempts: ${error.message}`);
         }
         
-        await delay(5000);
+        await delay(10000); // Longer delay between retries
       }
     }
 

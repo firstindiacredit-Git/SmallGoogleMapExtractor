@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node --expose-gc --max-old-space-size=512 --optimize-for-size --gc-interval=100 --unhandled-rejections=strict index.js",
-    "dev": "nodemon --expose-gc --max-old-space-size=512 --optimize-for-size --gc-interval=100 --unhandled-rejections=strict index.js"
+    "start": "NODE_ENV=production node --expose-gc --max-old-space-size=512 --optimize-for-size --gc-interval=100 index.js",
+    "dev": "nodemon --expose-gc --max-old-space-size=512 --optimize-for-size --gc-interval=100 index.js"
   },
   "keywords": [],
   "author": "",
