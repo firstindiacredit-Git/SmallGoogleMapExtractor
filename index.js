@@ -31,6 +31,9 @@ const cleanText = (text) => {
 // Keep track of active scraping sessions
 const activeSessions = new Map();
 
+const BATCH_SIZE = 10; // Process fewer results at a time
+const MAX_RESULTS = 50; // Limit total results for t2.micro
+
 const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
   let browser = null;
   let page = null;
@@ -72,8 +75,31 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
     browser = await puppeteer.launch({
       headless: true,
       executablePath: executablePath(),
-      defaultViewport: null,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu',
+        '--single-process',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-translate',
+        '--hide-scrollbars',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--no-first-run',
+        '--safebrowsing-disable-auto-update',
+        '--js-flags="--max-old-space-size=512"'
+      ],
+      defaultViewport: {
+        width: 1280,
+        height: 720
+      }
     });
     page = await browser.newPage();
 
@@ -316,6 +342,11 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
       lastResultCount = currentResults;
       totalScrolls++;
       await delay(2000); // Add a delay between scrolls
+
+      if (batchResults.length >= MAX_RESULTS) {
+        console.log(`Reached maximum results limit (${MAX_RESULTS})`);
+        break;
+      }
     }
 
     // Generate Excel file
