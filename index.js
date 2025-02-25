@@ -66,7 +66,7 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
     browser = await puppeteer.launch({
       headless: true,
       executablePath: process.env.NODE_ENV === 'production' 
-        ? '/usr/bin/chromium-browser'  // Use system Chromium on AWS
+        ? '/usr/bin/chromium-browser'
         : executablePath(),
       args: [
         '--no-sandbox',
@@ -79,9 +79,17 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         '--disable-extensions',
         '--ignore-certificate-errors',
         '--disable-accelerated-2d-canvas',
-        '--disable-web-security',
-        '--disable-features=site-per-process',
-        '--window-size=1920,1080'
+        '--window-size=1920,1080',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-dev-shm-usage',
+        '--disable-extensions',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        '--enable-features=NetworkService,NetworkServiceInProcess'
       ]
     });
 
@@ -101,12 +109,10 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
     
     while (retryCount < MAX_RETRIES) {
       try {
-        // Clear cookies and cache before each attempt
-        await page.setCookie();
-        await page.evaluate(() => {
-          localStorage.clear();
-          sessionStorage.clear();
-        });
+        // Clear cookies only
+        const client = await page.target().createCDPSession();
+        await client.send('Network.clearBrowserCookies');
+        await client.send('Network.clearBrowserCache');
 
         await page.goto('https://www.google.com/maps', { 
           waitUntil: ['networkidle0', 'domcontentloaded'],
@@ -136,7 +142,7 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         await searchButton.click();
         await delay(5000);
 
-        // Wait for any result selector with longer timeout
+        // Wait for results
         console.log('Waiting for results...');
         const resultSelectors = [
           'div[role="article"]',
@@ -174,7 +180,7 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
           throw new Error(`Failed to load results after ${MAX_RETRIES} attempts: ${error.message}`);
         }
         
-        await delay(10000); // Longer delay between retries
+        await delay(10000);
       }
     }
 
