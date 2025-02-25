@@ -72,8 +72,13 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         sendUpdate([], 0, 'Starting search...');
 
         const browser = await puppeteerExtra.launch({
-            headless: false,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu'
+            ]
         });
 
         page = await browser.newPage();
