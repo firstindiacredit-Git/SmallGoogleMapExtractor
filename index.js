@@ -70,10 +70,11 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
     sendUpdate([], 0, 'Starting search...');
 
     const browser = await puppeteer.launch({
-    headless: false, // Headless mode disable
-    slowMo: 100, // Thoda slow animation dega
+    executablePath: '/usr/bin/google-chrome',
+    headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox']
 });
+
 
     page = await browser.newPage();
 
