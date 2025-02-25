@@ -70,27 +70,32 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
     sendUpdate([], 0, 'Starting search...');
 
     const browser = await puppeteer.launch({
-    executablePath: '/usr/bin/google-chrome',
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  executablePath: '/usr/bin/google-chrome',
+  headless: false, // isko false rakho taaki UI dikhe
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
 });
+
 
 
     page = await browser.newPage();
 
     // Set user agent and viewport
     await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'
-      );
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+);
+
     await page.setViewport({ width: 1280, height: 800 });
 
     // Navigate to Google Maps
-    await page.goto('https://www.google.com/maps', { waitUntil: 'networkidle2' });
-    await page.waitForSelector('#searchboxinput', { timeout: 30000 });
+    await page.goto('https://www.google.com/maps', {
+    waitUntil: 'networkidle2',
+    timeout: 60000 // Timeout badha diya 60 sec
+      });
     console.log('Navigated to Google Maps');
 
     // Wait for and click the searchbox
-    await page.waitForSelector('#searchboxinput', { timeout: 30000 });
+    await delay(5000); // 5 sec wait before searching
+    await page.waitForSelector('#searchboxinput', { timeout: 60000 });
     await page.click('#searchboxinput');
     console.log('Clicked search box');
 
