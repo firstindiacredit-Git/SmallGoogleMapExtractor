@@ -62,6 +62,7 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
   };
 
   try {
+    // AWS-specific browser configuration
     browser = await puppeteer.launch({
       headless: true,
       executablePath: process.env.NODE_ENV === 'production' 
@@ -76,111 +77,57 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         '--no-zygote',
         '--single-process',
         '--disable-extensions',
-        '--ignore-certificate-errors',
         '--disable-accelerated-2d-canvas',
         '--window-size=1920,1080',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-breakpad',
-        '--disable-component-extensions-with-background-pages',
-        '--disable-dev-shm-usage',
-        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-        '--disable-ipc-flooding-protection',
-        '--disable-renderer-backgrounding',
-        '--enable-features=NetworkService,NetworkServiceInProcess'
+        '--hide-scrollbars',
+        '--disable-notifications',
+        '--disable-geolocation',
+        '--lang=en-US,en',
+        '--disable-features=site-per-process',
+        '--disable-web-security'
       ]
     });
 
     page = await browser.newPage();
-    
-    // Set longer timeouts
+
+    // Configure page settings
     await page.setDefaultNavigationTimeout(120000);
     await page.setDefaultTimeout(120000);
+    await page.setViewport({ width: 1920, height: 1080 });
+    
+    // Set user agent
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
 
-    // Set viewport
-    await page.setViewport({
-      width: 1920,
-      height: 1080
+    // Enable request interception
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      if (['image', 'stylesheet', 'font'].includes(request.resourceType())) {
+        request.abort();
+      } else {
+        request.continue();
+      }
     });
 
     console.log('Navigating to Google Maps...');
     
     while (retryCount < MAX_RETRIES) {
       try {
-        // Clear cookies and cache
+        // Clear session data
         const client = await page.target().createCDPSession();
         await client.send('Network.clearBrowserCookies');
         await client.send('Network.clearBrowserCache');
 
-        // Navigate to Google Maps
-        await page.goto('https://www.google.com/maps', { 
+        // Navigate directly to search URL
+        const searchQuery = encodeURIComponent(location ? `${keyword} in ${location}` : keyword);
+        const searchUrl = `https://www.google.com/maps/search/${searchQuery}`;
+        
+        console.log('Navigating to search URL:', searchUrl);
+        await page.goto(searchUrl, { 
           waitUntil: ['networkidle0', 'domcontentloaded'],
           timeout: 120000 
         });
 
-        // Wait for initial load with multiple selector attempts
-        console.log('Waiting for search box...');
-        const searchBoxSelectors = [
-          '#searchboxinput',
-          'input#searchboxinput',
-          'input[name="q"]',
-          'input[aria-label*="Search"]',
-          '.searchboxinput'
-        ];
-
-        let searchBox = null;
-        for (const selector of searchBoxSelectors) {
-          try {
-            await page.waitForSelector(selector, { 
-              visible: true, 
-              timeout: 20000 
-            });
-            searchBox = await page.$(selector);
-            if (searchBox) {
-              console.log(`Found search box with selector: ${selector}`);
-              break;
-            }
-          } catch (e) {
-            console.log(`Selector ${selector} not found, trying next...`);
-          }
-        }
-
-        if (!searchBox) {
-          throw new Error('Search box not found');
-        }
-
-        // Clear any existing text and type search query
-        await searchBox.click({ clickCount: 3 }); // Select all text
-        await searchBox.press('Backspace'); // Clear existing text
-        console.log('Typing search query...');
-        await searchBox.type(location ? `${keyword} in ${location}` : keyword);
-        await delay(2000);
-
-        // Find and click search button
-        const searchButtonSelectors = [
-          '#searchbox-searchbutton',
-          'button[aria-label*="Search"]',
-          'button[jsaction*="search"]'
-        ];
-
-        let searchButton = null;
-        for (const selector of searchButtonSelectors) {
-          searchButton = await page.$(selector);
-          if (searchButton) {
-            console.log(`Found search button with selector: ${selector}`);
-            break;
-          }
-        }
-
-        if (!searchButton) {
-          throw new Error('Search button not found');
-        }
-
-        console.log('Clicking search button...');
-        await searchButton.click();
-        await delay(5000);
-
-        // Wait for results
+        // Wait for any result elements
         console.log('Waiting for results...');
         const resultSelectors = [
           'div[role="article"]',
@@ -198,6 +145,7 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
               timeout: 30000 
             });
             resultsFound = true;
+            console.log(`Found results with selector: ${selector}`);
             break;
           } catch (e) {
             console.log(`Selector ${selector} not found, trying next...`);
@@ -218,12 +166,14 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
           throw new Error(`Failed to load results after ${MAX_RETRIES} attempts: ${error.message}`);
         }
         
-        // Take screenshot for debugging in production
+        // Take screenshot for debugging
         if (process.env.NODE_ENV === 'production') {
+          const screenshotPath = `error-screenshot-${Date.now()}.png`;
           await page.screenshot({
-            path: `error-screenshot-${Date.now()}.png`,
+            path: screenshotPath,
             fullPage: true
           });
+          console.log(`Screenshot saved: ${screenshotPath}`);
         }
         
         await delay(10000);
