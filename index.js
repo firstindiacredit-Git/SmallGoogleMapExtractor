@@ -62,7 +62,6 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
   };
 
   try {
-    // Modified browser launch configuration for AWS
     browser = await puppeteer.launch({
       headless: true,
       executablePath: process.env.NODE_ENV === 'production' 
@@ -85,7 +84,6 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         '--disable-breakpad',
         '--disable-component-extensions-with-background-pages',
         '--disable-dev-shm-usage',
-        '--disable-extensions',
         '--disable-features=TranslateUI,BlinkGenPropertyTrees',
         '--disable-ipc-flooding-protection',
         '--disable-renderer-backgrounding',
@@ -109,31 +107,71 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
     
     while (retryCount < MAX_RETRIES) {
       try {
-        // Clear cookies only
+        // Clear cookies and cache
         const client = await page.target().createCDPSession();
         await client.send('Network.clearBrowserCookies');
         await client.send('Network.clearBrowserCache');
 
+        // Navigate to Google Maps
         await page.goto('https://www.google.com/maps', { 
           waitUntil: ['networkidle0', 'domcontentloaded'],
           timeout: 120000 
         });
 
-        // Wait for initial load
-        await delay(5000);
+        // Wait for initial load with multiple selector attempts
+        console.log('Waiting for search box...');
+        const searchBoxSelectors = [
+          '#searchboxinput',
+          'input#searchboxinput',
+          'input[name="q"]',
+          'input[aria-label*="Search"]',
+          '.searchboxinput'
+        ];
 
-        // Check if search box exists
-        const searchBox = await page.$('#searchboxinput');
+        let searchBox = null;
+        for (const selector of searchBoxSelectors) {
+          try {
+            await page.waitForSelector(selector, { 
+              visible: true, 
+              timeout: 20000 
+            });
+            searchBox = await page.$(selector);
+            if (searchBox) {
+              console.log(`Found search box with selector: ${selector}`);
+              break;
+            }
+          } catch (e) {
+            console.log(`Selector ${selector} not found, trying next...`);
+          }
+        }
+
         if (!searchBox) {
-          console.log('Search box not found, retrying...');
           throw new Error('Search box not found');
         }
 
+        // Clear any existing text and type search query
+        await searchBox.click({ clickCount: 3 }); // Select all text
+        await searchBox.press('Backspace'); // Clear existing text
         console.log('Typing search query...');
-        await page.type('#searchboxinput', location ? `${keyword} in ${location}` : keyword);
+        await searchBox.type(location ? `${keyword} in ${location}` : keyword);
         await delay(2000);
 
-        const searchButton = await page.$('#searchbox-searchbutton');
+        // Find and click search button
+        const searchButtonSelectors = [
+          '#searchbox-searchbutton',
+          'button[aria-label*="Search"]',
+          'button[jsaction*="search"]'
+        ];
+
+        let searchButton = null;
+        for (const selector of searchButtonSelectors) {
+          searchButton = await page.$(selector);
+          if (searchButton) {
+            console.log(`Found search button with selector: ${selector}`);
+            break;
+          }
+        }
+
         if (!searchButton) {
           throw new Error('Search button not found');
         }
@@ -178,6 +216,14 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         
         if (retryCount >= MAX_RETRIES) {
           throw new Error(`Failed to load results after ${MAX_RETRIES} attempts: ${error.message}`);
+        }
+        
+        // Take screenshot for debugging in production
+        if (process.env.NODE_ENV === 'production') {
+          await page.screenshot({
+            path: `error-screenshot-${Date.now()}.png`,
+            fullPage: true
+          });
         }
         
         await delay(10000);
