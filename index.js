@@ -37,9 +37,10 @@ const MAX_RESULTS = 50; // Limit total results for t2.micro
 const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
   let browser = null;
   let page = null;
+  let retryCount = 0;
+  const MAX_RETRIES = 3;
   let batchResults = [];
 
-  // Define sendUpdate function at the beginning
   const sendUpdate = (results, total, message, isComplete = false, filename = null) => {
     const session = activeSessions.get(sessionId);
     if (!session || !session.isActive) {
@@ -61,17 +62,6 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
   };
 
   try {
-    // Check if session is still active
-    const session = activeSessions.get(sessionId);
-    if (!session || !session.isActive) {
-      throw new Error('CANCELLED');
-    }
-
-    console.log(`Searching for ${keyword} in ${location}`);
-    
-    // Initial update
-    sendUpdate([], 0, 'Starting search...');
-
     browser = await puppeteer.launch({
       headless: true,
       executablePath: executablePath(),
@@ -79,64 +69,91 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
         '--disable-gpu',
         '--single-process',
         '--disable-extensions',
-        '--disable-background-networking',
-        '--disable-default-apps',
-        '--disable-sync',
-        '--disable-translate',
-        '--hide-scrollbars',
-        '--metrics-recording-only',
-        '--mute-audio',
-        '--no-first-run',
-        '--safebrowsing-disable-auto-update',
         '--js-flags="--max-old-space-size=512"'
-      ],
-      defaultViewport: {
-        width: 1280,
-        height: 720
-      }
+      ]
     });
+
     page = await browser.newPage();
+    
+    // Set longer timeouts
+    await page.setDefaultNavigationTimeout(90000);
+    await page.setDefaultTimeout(90000);
 
-    // Set user agent and viewport
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    await page.setViewport({ width: 1280, height: 800 });
+    console.log('Navigating to Google Maps...');
+    
+    while (retryCount < MAX_RETRIES) {
+      try {
+        // Navigate to Google Maps
+        await page.goto('https://www.google.com/maps', { 
+          waitUntil: 'networkidle2',
+          timeout: 90000 
+        });
 
-    // Navigate to Google Maps
-    await page.goto('https://www.google.com/maps', { waitUntil: 'networkidle0', timeout: 30000 });
-    console.log('Navigated to Google Maps');
+        // Wait for search box
+        console.log('Waiting for search box...');
+        await page.waitForSelector('#searchboxinput', { 
+          visible: true, 
+          timeout: 30000 
+        });
+
+        await delay(2000);
+
+        // Type search query
+        console.log('Typing search query...');
+        await page.type('#searchboxinput', location ? `${keyword} in ${location}` : keyword);
+        await delay(1000);
+
+        // Click search button
+        console.log('Clicking search button...');
+        await page.click('#searchbox-searchbutton');
+        await delay(3000);
+
+        // Wait for any of these result selectors
+        console.log('Waiting for results...');
+        await Promise.race([
+          page.waitForSelector('div[role="article"]', { visible: true, timeout: 30000 }),
+          page.waitForSelector('.Nv2PK', { visible: true, timeout: 30000 }),
+          page.waitForSelector('a[href^="/maps/place"]', { visible: true, timeout: 30000 }),
+          page.waitForSelector('.section-result', { visible: true, timeout: 30000 }),
+          page.waitForSelector('.DxyBCb', { visible: true, timeout: 30000 })
+        ]);
+
+        // Additional check for results
+        const hasResults = await page.evaluate(() => {
+          return !!(
+            document.querySelector('div[role="article"]') ||
+            document.querySelector('.Nv2PK') ||
+            document.querySelector('a[href^="/maps/place"]') ||
+            document.querySelector('.section-result') ||
+            document.querySelector('.DxyBCb')
+          );
+        });
+
+        if (hasResults) {
+          console.log('Results found successfully');
+          break;
+        }
+
+        throw new Error('No results found');
+      } catch (error) {
+        retryCount++;
+        console.log(`Attempt ${retryCount} failed. Retrying...`);
+        
+        if (retryCount >= MAX_RETRIES) {
+          throw new Error('Failed to load results after multiple attempts');
+        }
+        
+        await delay(5000);
+      }
+    }
 
     // Wait for and click the searchbox
     await page.waitForSelector('#searchboxinput', { visible: true, timeout: 10000 });
     await page.click('#searchboxinput');
     console.log('Clicked search box');
-
-    // Type the search query with location
-    const searchQuery = location ? `${keyword} in ${location}` : keyword;
-    await page.type('#searchboxinput', searchQuery);
-    console.log('Typed search query:', searchQuery);
-
-    // Click search button
-    await page.click('#searchbox-searchbutton');
-    console.log('Clicked search button');
-
-    // Wait for results to load with multiple possible selectors
-    console.log('Waiting for results...');
-    try {
-      await Promise.race([
-        page.waitForSelector('.section-result', { visible: true, timeout: 10000 }),
-        page.waitForSelector('.Nv2PK', { visible: true, timeout: 10000 }),
-        page.waitForSelector('div[role="article"]', { visible: true, timeout: 10000 }),
-        page.waitForSelector('a[href^="/maps/place/"]', { visible: true, timeout: 10000 })
-      ]);
-    } catch (error) {
-      console.log('Timeout waiting for initial results');
-    }
 
     // Wait a bit for all results to populate
     await delay(3000);
@@ -157,7 +174,7 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
 
         const filename = `results_${Date.now()}.xlsx`;
         const filepath = path.join(__dirname, 'uploads', filename);
-        XLSX.writeFile(wb, filepath);
+        XLSX.utils.writeFile(wb, filepath);
 
         // Send the current results before stopping with filename
         sendUpdate(batchResults, batchResults.length, 
@@ -364,27 +381,25 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
       true, filename);
 
   } catch (error) {
-    if (error.message === 'CANCELLED') {
-      // Generate Excel file when cancelled
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(batchResults);
-      XLSX.utils.book_append_sheet(wb, ws, "Results");
-
-      const filename = `results_${Date.now()}.xlsx`;
-      const filepath = path.join(__dirname, 'uploads', filename);
-      XLSX.writeFile(wb, filepath);
-
-      // Send the current results when cancelled with filename
-      sendUpdate(batchResults, batchResults.length, 
-        `Extraction stopped. Found ${batchResults.length} results`, 
-        true, filename);
-    } else {
-      console.error('Error occurred while scraping:', error);
-      throw error;
-    }
+    console.error('Scraping error:', error);
+    const errorMessage = {
+      isComplete: true,
+      results: [],
+      message: 'Error occurred during scraping: ' + error.message,
+      error: error.message
+    };
+    res.write(JSON.stringify(errorMessage) + '\n');
   } finally {
-    if (page) await page.close().catch(() => {});
-    if (browser) await browser.close().catch(() => {});
+    if (page) {
+      await page.evaluate(() => document.documentElement.innerHTML = '');
+      await page.close().catch(() => {});
+    }
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+    if (global.gc) {
+      global.gc();
+    }
   }
 };
 
