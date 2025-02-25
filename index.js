@@ -1,13 +1,15 @@
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer');
+const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const puppeteer = require('puppeteer');
 const { executablePath } = require('puppeteer');
 const XLSX = require('xlsx');
 const path = require('path');
 const fs = require('fs');
 
-puppeteer.use(StealthPlugin());
+// Add stealth plugin and use puppeteer-extra instead of puppeteer
+puppeteerExtra.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
@@ -69,8 +71,8 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         // Initial update
         sendUpdate([], 0, 'Starting search...');
 
-        const browser = await puppeteer.launch({
-            headless: false, // Headless mode off for debugging
+        const browser = await puppeteerExtra.launch({
+            headless: false,
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
 
