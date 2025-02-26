@@ -62,7 +62,6 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
   };
 
   try {
-    // AWS-specific browser configuration
     browser = await puppeteer.launch({
       headless: true,
       executablePath: process.env.NODE_ENV === 'production' 
@@ -73,86 +72,86 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process',
-        '--disable-extensions',
-        '--disable-accelerated-2d-canvas',
         '--window-size=1920,1080',
-        '--hide-scrollbars',
-        '--disable-notifications',
-        '--disable-geolocation',
-        '--lang=en-US,en',
-        '--disable-features=site-per-process',
-        '--disable-web-security'
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--allow-running-insecure-content',
+        '--disable-blink-features=AutomationControlled',
+        '--lang=en-US,en'
       ]
     });
 
     page = await browser.newPage();
-
-    // Configure page settings
-    await page.setDefaultNavigationTimeout(120000);
-    await page.setDefaultTimeout(120000);
-    await page.setViewport({ width: 1920, height: 1080 });
     
     // Set user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-
-    // Enable request interception
-    await page.setRequestInterception(true);
-    page.on('request', (request) => {
-      if (['image', 'stylesheet', 'font'].includes(request.resourceType())) {
-        request.abort();
-      } else {
-        request.continue();
-      }
-    });
-
-    console.log('Navigating to Google Maps...');
     
+    // Set viewport
+    await page.setViewport({ width: 1920, height: 1080 });
+    
+    // Set longer timeouts
+    await page.setDefaultNavigationTimeout(120000);
+    await page.setDefaultTimeout(120000);
+
     while (retryCount < MAX_RETRIES) {
       try {
-        // Clear session data
-        const client = await page.target().createCDPSession();
-        await client.send('Network.clearBrowserCookies');
-        await client.send('Network.clearBrowserCache');
-
-        // Navigate directly to search URL
+        // Navigate to Google Maps search
         const searchQuery = encodeURIComponent(location ? `${keyword} in ${location}` : keyword);
         const searchUrl = `https://www.google.com/maps/search/${searchQuery}`;
         
-        console.log('Navigating to search URL:', searchUrl);
+        console.log('Navigating to:', searchUrl);
         await page.goto(searchUrl, { 
           waitUntil: ['networkidle0', 'domcontentloaded'],
           timeout: 120000 
         });
 
-        // Wait for any result elements
-        console.log('Waiting for results...');
-        const resultSelectors = [
-          'div[role="article"]',
-          '.Nv2PK',
-          'a[href^="/maps/place"]',
-          '.section-result',
-          '.DxyBCb'
-        ];
+        // Wait for page to load completely
+        await delay(5000);
 
-        let resultsFound = false;
-        for (const selector of resultSelectors) {
-          try {
-            await page.waitForSelector(selector, { 
-              visible: true, 
-              timeout: 30000 
-            });
-            resultsFound = true;
-            console.log(`Found results with selector: ${selector}`);
-            break;
-          } catch (e) {
-            console.log(`Selector ${selector} not found, trying next...`);
-          }
+        // Check if page loaded correctly
+        const content = await page.content();
+        if (content.includes('Sorry, we have no imagery')) {
+          throw new Error('Google Maps failed to load properly');
         }
 
-        if (resultsFound) {
+        // Wait for any of these result containers
+        console.log('Waiting for results...');
+        const resultSelectors = [
+          'div[role="feed"]',
+          'div.section-result-content',
+          'div.section-layout',
+          'div.section-layout-root',
+          '.section-result',
+          '.section-result-content',
+          'div.Nv2PK',
+          'a[href^="/maps/place"]',
+          'div[jsaction*="placeCard.place"]'
+        ];
+
+        // Wait for the feed container first
+        await page.waitForFunction(
+          (selectors) => {
+            return selectors.some(selector => 
+              document.querySelector(selector) !== null
+            );
+          },
+          { timeout: 30000 },
+          resultSelectors
+        );
+
+        // Check if results are present
+        const hasResults = await page.evaluate((selectors) => {
+          for (const selector of selectors) {
+            const elements = document.querySelectorAll(selector);
+            if (elements.length > 0) {
+              console.log(`Found ${elements.length} results with selector: ${selector}`);
+              return true;
+            }
+          }
+          return false;
+        }, resultSelectors);
+
+        if (hasResults) {
           console.log('Results found successfully');
           break;
         }
@@ -168,7 +167,7 @@ const scrapeGoogleMaps = async (keyword, location, res, sessionId) => {
         
         // Take screenshot for debugging
         if (process.env.NODE_ENV === 'production') {
-          const screenshotPath = `error-screenshot-${Date.now()}.png`;
+          const screenshotPath = `/tmp/error-screenshot-${Date.now()}.png`;
           await page.screenshot({
             path: screenshotPath,
             fullPage: true
